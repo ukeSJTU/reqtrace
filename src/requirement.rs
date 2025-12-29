@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Requirement metadata from frontmatter
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,17 +172,36 @@ impl Requirement {
     }
 }
 
-// RequirementStore for future use when scanning multiple requirement files
-#[allow(dead_code)]
+// RequirementStore for managing multiple requirement files
 #[derive(Debug, Default)]
 pub struct RequirementStore {
     requirements: HashMap<String, Requirement>,
 }
 
-#[allow(dead_code)]
 impl RequirementStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Load requirements from a list of file paths.
+    /// Collects all errors encountered during loading and returns them separately.
+    /// Returns (store, errors) where errors is a list of (path, error) tuples.
+    pub fn from_paths(paths: Vec<PathBuf>) -> (Self, Vec<(PathBuf, anyhow::Error)>) {
+        let mut store = Self::new();
+        let mut errors = Vec::new();
+
+        for path in paths {
+            match Requirement::from_file(&path) {
+                Ok(req) => {
+                    store.add(req);
+                }
+                Err(e) => {
+                    errors.push((path, e));
+                }
+            }
+        }
+
+        (store, errors)
     }
 
     pub fn add(&mut self, req: Requirement) {
@@ -203,5 +222,13 @@ impl RequirementStore {
 
     pub fn is_empty(&self) -> bool {
         self.requirements.is_empty()
+    }
+
+    /// Get all traceable IDs from all requirements
+    pub fn get_all_ids(&self) -> Vec<String> {
+        self.requirements
+            .values()
+            .flat_map(|req| req.get_all_ids())
+            .collect()
     }
 }

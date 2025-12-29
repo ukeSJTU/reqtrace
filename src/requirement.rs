@@ -4,10 +4,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::config::requirement::*;
 
 /// Requirement metadata from frontmatter
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RequirementMeta {
     pub id: String,
     pub title: String,
@@ -24,7 +26,7 @@ pub struct RequirementMeta {
 }
 
 /// Acceptance Criterion (scenario)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AcceptanceCriterion {
     pub id: String,
     pub title: String,
@@ -44,7 +46,7 @@ impl Requirement {
     /// Parse a markdown file with frontmatter
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
-            .context(format!("Failed to read file: {:?}", path.as_ref()))?;
+            .with_context(|| format!("Failed to read file: {}", path.as_ref().display()))?;
         Self::from_string(&content)
     }
 
@@ -52,10 +54,10 @@ impl Requirement {
     pub fn from_string(content: &str) -> Result<Self> {
         // Split frontmatter and content
         let (frontmatter, body) = Self::split_frontmatter(content)?;
-        
+
         // Parse frontmatter
-        let meta: RequirementMeta = serde_yaml::from_str(&frontmatter)
-            .context("Failed to parse frontmatter YAML")?;
+        let meta: RequirementMeta =
+            serde_yaml::from_str(&frontmatter).context("Failed to parse frontmatter YAML")?;
 
         // Parse acceptance criteria from headings
         let acceptance_criteria = Self::parse_acceptance_criteria(&body, &meta.id);
@@ -74,16 +76,19 @@ impl Requirement {
     /// Split frontmatter and content
     fn split_frontmatter(content: &str) -> Result<(String, String)> {
         let lines: Vec<&str> = content.lines().collect();
-        
+
         // Check if starts with ---
-        if !lines.first().map_or(false, |l| l.trim() == "---") {
+        if !lines
+            .first()
+            .map_or(false, |l| l.trim() == FRONTMATTER_DELIMITER)
+        {
             return Ok((String::new(), content.to_string()));
         }
 
         // Find closing ---
         let end_idx = lines[1..]
             .iter()
-            .position(|l| l.trim() == "---")
+            .position(|l| l.trim() == FRONTMATTER_DELIMITER)
             .context("Frontmatter not closed with ---")?;
 
         let frontmatter = lines[1..=end_idx].join("\n");
@@ -102,10 +107,14 @@ impl Requirement {
 
         for event in parser {
             match event {
-                Event::Start(Tag::Heading { level, .. }) if level == pulldown_cmark::HeadingLevel::H3 => {
+                Event::Start(Tag::Heading { level, .. })
+                    if level == pulldown_cmark::HeadingLevel::H3 =>
+                {
                     // Save previous AC if exists
                     if let Some((_, title)) = current_heading.take() {
-                        if title.to_uppercase().contains("AC-") || title.contains("验收") {
+                        if title.to_uppercase().contains(AC_MARKER_EN)
+                            || title.contains(AC_MARKER_ZH)
+                        {
                             let ac_id = format!("{}.AC-{:02}", req_id, ac_counter);
                             criteria.push(AcceptanceCriterion {
                                 id: ac_id,
@@ -138,7 +147,7 @@ impl Requirement {
 
         // Don't forget the last AC
         if let Some((_, title)) = current_heading {
-            if title.to_uppercase().contains("AC-") || title.contains("验收") {
+            if title.to_uppercase().contains(AC_MARKER_EN) || title.contains(AC_MARKER_ZH) {
                 let ac_id = format!("{}.AC-{:02}", req_id, ac_counter);
                 criteria.push(AcceptanceCriterion {
                     id: ac_id,
@@ -165,6 +174,7 @@ impl Requirement {
     }
 
     /// Get all traceable IDs (requirement ID + all AC IDs)
+    #[allow(dead_code)]
     pub fn get_all_ids(&self) -> Vec<String> {
         let mut ids = vec![self.meta.id.clone()];
         ids.extend(self.acceptance_criteria.iter().map(|ac| ac.id.clone()));
@@ -172,23 +182,43 @@ impl Requirement {
     }
 }
 
-// RequirementStore for future use when scanning multiple requirement files
-#[allow(dead_code)]
+// RequirementStore for managing multiple requirement files
 #[derive(Debug, Default)]
 pub struct RequirementStore {
     requirements: HashMap<String, Requirement>,
 }
 
-#[allow(dead_code)]
 impl RequirementStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Load requirements from a list of file paths.
+    /// Collects all errors encountered during loading and returns them separately.
+    /// Returns (store, errors) where errors is a list of (path, error) tuples.
+    pub fn from_paths(paths: Vec<PathBuf>) -> (Self, Vec<(PathBuf, anyhow::Error)>) {
+        let mut store = Self::new();
+        let mut errors = Vec::new();
+
+        for path in paths {
+            match Requirement::from_file(&path) {
+                Ok(req) => {
+                    store.add(req);
+                }
+                Err(e) => {
+                    errors.push((path, e));
+                }
+            }
+        }
+
+        (store, errors)
     }
 
     pub fn add(&mut self, req: Requirement) {
         self.requirements.insert(req.meta.id.clone(), req);
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, id: &str) -> Option<&Requirement> {
         self.requirements.get(id)
     }
@@ -203,5 +233,29 @@ impl RequirementStore {
 
     pub fn is_empty(&self) -> bool {
         self.requirements.is_empty()
+    }
+
+    #[allow(dead_code)]
+    pub fn contains(&self, id: &str) -> bool {
+        self.requirements.contains_key(id)
+    }
+
+    #[allow(dead_code)]
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.requirements.keys().map(|s| s.as_str())
+    }
+
+    /// Get all traceable IDs as an iterator (more efficient)
+    pub fn all_ids(&self) -> impl Iterator<Item = &str> + '_ {
+        self.requirements.values().flat_map(|req| {
+            std::iter::once(req.meta.id.as_str())
+                .chain(req.acceptance_criteria.iter().map(|ac| ac.id.as_str()))
+        })
+    }
+
+    /// Get all traceable IDs from all requirements (legacy method, collects to Vec)
+    #[allow(dead_code)]
+    pub fn get_all_ids(&self) -> Vec<String> {
+        self.all_ids().map(|s| s.to_owned()).collect()
     }
 }

@@ -202,32 +202,48 @@ cargo install --path .
 ### 运行示例
 
 ```bash
-# 完整覆盖示例（100%）
+# 方式 1: 单个需求文件 + 单个代码文件
 cargo run -- check \
   --requirement examples/requirements/REQ-01-login-lock.md \
   --code examples/python/test_auth.py
 
-# 不完整覆盖示例（66.7%，将以错误码 1 退出）
+# 方式 2: 目录扫描（自动递归扫描 .md 和代码文件）
 cargo run -- check \
-  --requirement examples/requirements/REQ-01-login-lock.md \
-  --code examples/python/test_incomplete.py
+  --requirement examples/requirements/ \
+  --code examples/python/
+
+# 方式 3: 通配符模式（支持 glob 语法）
+cargo run -- check \
+  --requirement "examples/requirements/*.md" \
+  --code "examples/**/*.py"
+
+# 方式 4: 多个代码路径（支持混合文件、目录、模式）
+cargo run -- check \
+  --requirement requirements/ \
+  --code "src/**/*.py" "tests/**/*.py" "lib/core.py"
 ```
 
 ### 当前实现状态
 
-**已完成 (POC)**:
+**已完成 (v0.1)**:
 - ✅ Markdown 需求文件解析（Frontmatter + 验收标准）
 - ✅ SHA256 内容哈希计算（用于防腐机制）
 - ✅ Python 代码扫描（基于 Tree-sitter）
 - ✅ `@reqtrace:ID` 引用提取
 - ✅ 覆盖率报告生成
 - ✅ CI/CD 友好的退出码
+- ✅ **目录递归扫描**（基于 walkdir）
+- ✅ **通配符模式支持**（`*.md`, `tests/**/*.py` 等，基于 globset）
+- ✅ **并行处理**（基于 rayon，加速大型仓库扫描）
+- ✅ **智能输入识别**（自动检测文件/目录/模式）
+- ✅ **错误收集与统一报告**（部分文件失败不影响整体扫描）
 
 **待开发**:
-- ⏳ 目录递归扫描
 - ⏳ Lockfile 机制（staleness 检测）
 - ⏳ HTML 报告生成
 - ⏳ 更多语言支持（TypeScript, Rust, Go）
 - ⏳ VS Code 扩展
+- ⏳ 默认排除规则（target/, node_modules/, .git/ 等）
+- ⏳ 进度显示（大型仓库扫描时）
 
 更多示例和详细输出请查看 `examples/README.md`。

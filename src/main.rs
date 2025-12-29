@@ -2,7 +2,7 @@ mod file_discovery;
 mod requirement;
 mod scanner;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use file_discovery::{discover_code_files, discover_requirement_files};
 use requirement::RequirementStore;
@@ -63,8 +63,7 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     let req_files = discover_requirement_files(&req_input)?;
 
     if req_files.is_empty() {
-        eprintln!("Error: No requirement files found for: {}", req_input);
-        std::process::exit(1);
+        bail!("Error: No requirement files found for: {}", req_input);
     }
 
     println!("Found {} requirement file(s)", req_files.len());
@@ -81,8 +80,7 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     }
 
     if req_store.is_empty() {
-        eprintln!("Error: No valid requirements loaded");
-        std::process::exit(1);
+        bail!("Error: No valid requirements loaded");
     }
 
     println!("Loaded {} requirement(s) successfully", req_store.len());
@@ -95,8 +93,7 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     let code_files = discover_code_files(&code_inputs)?;
 
     if code_files.is_empty() {
-        eprintln!("Error: No code files found");
-        std::process::exit(1);
+        bail!("Error: No code files found");
     }
 
     println!("Found {} code file(s)", code_files.len());
@@ -143,7 +140,7 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
         if has_errors {
             println!("Some files failed to process!");
         }
-        std::process::exit(1);
+        bail!("Traceability check failed");
     } else {
         println!("All requirements are properly traced!");
     }

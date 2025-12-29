@@ -102,7 +102,7 @@ impl Requirement {
 
         for event in parser {
             match event {
-                Event::Start(Tag::Heading(level, _, _)) if level == pulldown_cmark::HeadingLevel::H3 => {
+                Event::Start(Tag::Heading { level, .. }) if level == pulldown_cmark::HeadingLevel::H3 => {
                     // Save previous AC if exists
                     if let Some((_, title)) = current_heading.take() {
                         if title.to_uppercase().contains("AC-") || title.contains("验收") {
@@ -123,7 +123,7 @@ impl Requirement {
                         heading_text.push_str(&text);
                     }
                 }
-                Event::End(Tag::Heading(_, _, _)) => {
+                Event::End(pulldown_cmark::TagEnd::Heading(_)) => {
                     // Heading text is complete
                 }
                 Event::Text(text) | Event::Code(text) if current_heading.is_some() => {

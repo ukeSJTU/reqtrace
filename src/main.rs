@@ -1,12 +1,13 @@
+mod file_discovery;
 mod requirement;
 mod scanner;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use requirement::Requirement;
+use file_discovery::{discover_code_files, discover_requirement_files};
+use requirement::RequirementStore;
 use scanner::{CodeScanner, TraceabilityReport};
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "reqtrace")]
@@ -20,24 +21,24 @@ struct Cli {
 enum Commands {
     /// Scan and analyze traceability between requirements and code
     Check {
-        /// Path to requirement markdown file
+        /// Path to requirement file, directory, or glob pattern (e.g., "requirements/", "*.md", "reqs/**/*.md")
         #[arg(short, long)]
-        requirement: PathBuf,
+        requirement: String,
 
-        /// Path to source code file(s) to scan
+        /// Path(s) to source code files, directories, or glob patterns (e.g., "src/", "tests/**/*.py")
         #[arg(short, long)]
-        code: Vec<PathBuf>,
+        code: Vec<String>,
     },
     
     /// Generate a traceability report
     Report {
-        /// Path to requirement markdown file
+        /// Path to requirement file, directory, or glob pattern
         #[arg(short, long)]
-        requirement: PathBuf,
+        requirement: String,
 
-        /// Path to source code file(s) to scan
+        /// Path(s) to source code files, directories, or glob patterns
         #[arg(short, long)]
-        code: Vec<PathBuf>,
+        code: Vec<String>,
     },
 }
 
@@ -56,36 +57,67 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn check_traceability(req_path: PathBuf, code_paths: Vec<PathBuf>) -> Result<()> {
-    // Parse requirement
-    println!("Parsing requirement: {}", req_path.display());
-    let req = Requirement::from_file(&req_path)?;
+fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()> {
+    // Discover requirement files
+    println!("Discovering requirement files from: {}", req_input);
+    let req_files = discover_requirement_files(&req_input)?;
     
-    println!("   ID: {}", req.meta.id);
-    println!("   Title: {}", req.meta.title);
-    println!("   Hash: {}", &req.hash[..16]);
+    if req_files.is_empty() {
+        eprintln!("Error: No requirement files found for: {}", req_input);
+        std::process::exit(1);
+    }
     
-    if !req.acceptance_criteria.is_empty() {
-        println!("   Acceptance Criteria: {}", req.acceptance_criteria.len());
-        for ac in &req.acceptance_criteria {
-            println!("     - {}: {}", ac.id, ac.title);
+    println!("Found {} requirement file(s)", req_files.len());
+    
+    // Load all requirements
+    let (req_store, req_errors) = RequirementStore::from_paths(req_files);
+    
+    // Report requirement loading errors
+    if !req_errors.is_empty() {
+        eprintln!("\nErrors loading requirements:");
+        for (path, err) in &req_errors {
+            eprintln!("  ✗ {}: {}", path.display(), err);
         }
     }
-
-    // Scan code files
-    println!("\nScanning code files...");
-    let mut scanner = CodeScanner::new()?;
-    let mut all_references = Vec::new();
-
-    for code_path in &code_paths {
-        println!("   Scanning: {}", code_path.display());
-        let references = scanner.scan_file(code_path)?;
-        println!("     Found {} references", references.len());
-        all_references.extend(references);
+    
+    if req_store.is_empty() {
+        eprintln!("Error: No valid requirements loaded");
+        std::process::exit(1);
+    }
+    
+    println!("Loaded {} requirement(s) successfully", req_store.len());
+    for req in req_store.all() {
+        println!("  - {}: {}", req.meta.id, req.meta.title);
     }
 
+    // Discover code files
+    println!("\nDiscovering code files...");
+    let code_files = discover_code_files(&code_inputs)?;
+    
+    if code_files.is_empty() {
+        eprintln!("Error: No code files found");
+        std::process::exit(1);
+    }
+    
+    println!("Found {} code file(s)", code_files.len());
+
+    // Scan code files in parallel
+    println!("\nScanning code files in parallel...");
+    let scanner = CodeScanner::new()?;
+    let (all_references, scan_errors) = scanner.scan_files_parallel(code_files);
+    
+    // Report scanning errors
+    if !scan_errors.is_empty() {
+        eprintln!("\nErrors scanning code files:");
+        for (path, err) in &scan_errors {
+            eprintln!("  ✗ {}: {}", path.display(), err);
+        }
+    }
+    
+    println!("Found {} trace reference(s)", all_references.len());
+
     // Analyze coverage
-    let all_req_ids: HashSet<String> = req.get_all_ids().into_iter().collect();
+    let all_req_ids: HashSet<String> = req_store.get_all_ids().into_iter().collect();
     let covered_ids: HashSet<String> = all_references
         .iter()
         .map(|r| r.req_id.clone())
@@ -106,9 +138,17 @@ fn check_traceability(req_path: PathBuf, code_paths: Vec<PathBuf>) -> Result<()>
 
     report.print_summary();
 
-    // Exit with error if coverage is incomplete
-    if report.covered_requirements < report.total_requirements {
-        println!("Not all requirements are traced!");
+    // Exit with error if there were any errors or coverage is incomplete
+    let has_errors = !req_errors.is_empty() || !scan_errors.is_empty();
+    let incomplete_coverage = report.covered_requirements < report.total_requirements;
+    
+    if has_errors || incomplete_coverage {
+        if incomplete_coverage {
+            println!("Not all requirements are traced!");
+        }
+        if has_errors {
+            println!("Some files failed to process!");
+        }
         std::process::exit(1);
     } else {
         println!("All requirements are properly traced!");
@@ -117,7 +157,7 @@ fn check_traceability(req_path: PathBuf, code_paths: Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
-fn generate_report(req_path: PathBuf, code_paths: Vec<PathBuf>) -> Result<()> {
+fn generate_report(req_input: String, code_inputs: Vec<String>) -> Result<()> {
     // For now, just run the same check - in future this will generate HTML
-    check_traceability(req_path, code_paths)
+    check_traceability(req_input, code_inputs)
 }

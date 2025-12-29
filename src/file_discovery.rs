@@ -98,24 +98,21 @@ fn discover_files_from_path(
 
     let mut files = Vec::new();
 
-    // Derive base directory to limit the WalkDir search
-    let base_dir = if path_str.contains('/') {
-        let parts: Vec<&str> = path_str.split('/').collect();
-        let mut base_parts = Vec::new();
-        for part in parts {
-            if part.contains('*') || part.contains('?') || part.contains('[') {
-                break;
-            }
-            base_parts.push(part);
+    // Derive base directory to limit the WalkDir search. Use Path and its
+    // components to be cross-platform (don't assume '/' as the separator).
+    let mut base_dir = PathBuf::new();
+    for component in Path::new(path_str).components() {
+        let part_str = component.as_os_str().to_string_lossy();
+        if part_str.contains('*') || part_str.contains('?') || part_str.contains('[') {
+            break;
         }
-        if base_parts.is_empty() {
-            ".".to_string()
-        } else {
-            base_parts.join("/")
-        }
-    } else {
-        ".".to_string()
-    };
+        base_dir.push(component.as_os_str());
+    }
+
+    // If no non-glob prefix was found (e.g. "*.rs"), search from current dir.
+    if base_dir.as_os_str().is_empty() {
+        base_dir.push(".");
+    }
 
     for entry_result in WalkDir::new(&base_dir).follow_links(false) {
         match entry_result {

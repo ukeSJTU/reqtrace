@@ -29,7 +29,7 @@ enum Commands {
         #[arg(short, long)]
         code: Vec<String>,
     },
-    
+
     /// Generate a traceability report
     Report {
         /// Path to requirement file, directory, or glob pattern
@@ -61,17 +61,17 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     // Discover requirement files
     println!("Discovering requirement files from: {}", req_input);
     let req_files = discover_requirement_files(&req_input)?;
-    
+
     if req_files.is_empty() {
         eprintln!("Error: No requirement files found for: {}", req_input);
         std::process::exit(1);
     }
-    
+
     println!("Found {} requirement file(s)", req_files.len());
-    
+
     // Load all requirements
     let (req_store, req_errors) = RequirementStore::from_paths(req_files);
-    
+
     // Report requirement loading errors
     if !req_errors.is_empty() {
         eprintln!("\nErrors loading requirements:");
@@ -79,12 +79,12 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
             eprintln!("  ✗ {}: {}", path.display(), err);
         }
     }
-    
+
     if req_store.is_empty() {
         eprintln!("Error: No valid requirements loaded");
         std::process::exit(1);
     }
-    
+
     println!("Loaded {} requirement(s) successfully", req_store.len());
     for req in req_store.all() {
         println!("  - {}: {}", req.meta.id, req.meta.title);
@@ -93,19 +93,19 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     // Discover code files
     println!("\nDiscovering code files...");
     let code_files = discover_code_files(&code_inputs)?;
-    
+
     if code_files.is_empty() {
         eprintln!("Error: No code files found");
         std::process::exit(1);
     }
-    
+
     println!("Found {} code file(s)", code_files.len());
 
     // Scan code files in parallel
     println!("\nScanning code files in parallel...");
     let scanner = CodeScanner::new()?;
     let (all_references, scan_errors) = scanner.scan_files_parallel(code_files);
-    
+
     // Report scanning errors
     if !scan_errors.is_empty() {
         eprintln!("\nErrors scanning code files:");
@@ -113,20 +113,14 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
             eprintln!("  ✗ {}: {}", path.display(), err);
         }
     }
-    
+
     println!("Found {} trace reference(s)", all_references.len());
 
     // Analyze coverage
     let all_req_ids: HashSet<String> = req_store.get_all_ids().into_iter().collect();
-    let covered_ids: HashSet<String> = all_references
-        .iter()
-        .map(|r| r.req_id.clone())
-        .collect();
+    let covered_ids: HashSet<String> = all_references.iter().map(|r| r.req_id.clone()).collect();
 
-    let uncovered_ids: Vec<String> = all_req_ids
-        .difference(&covered_ids)
-        .cloned()
-        .collect();
+    let uncovered_ids: Vec<String> = all_req_ids.difference(&covered_ids).cloned().collect();
 
     // Create report
     let report = TraceabilityReport {
@@ -141,7 +135,7 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     // Exit with error if there were any errors or coverage is incomplete
     let has_errors = !req_errors.is_empty() || !scan_errors.is_empty();
     let incomplete_coverage = report.covered_requirements < report.total_requirements;
-    
+
     if has_errors || incomplete_coverage {
         if incomplete_coverage {
             println!("Not all requirements are traced!");

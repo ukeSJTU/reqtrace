@@ -52,10 +52,10 @@ impl Requirement {
     pub fn from_string(content: &str) -> Result<Self> {
         // Split frontmatter and content
         let (frontmatter, body) = Self::split_frontmatter(content)?;
-        
+
         // Parse frontmatter
-        let meta: RequirementMeta = serde_yaml::from_str(&frontmatter)
-            .context("Failed to parse frontmatter YAML")?;
+        let meta: RequirementMeta =
+            serde_yaml::from_str(&frontmatter).context("Failed to parse frontmatter YAML")?;
 
         // Parse acceptance criteria from headings
         let acceptance_criteria = Self::parse_acceptance_criteria(&body, &meta.id);
@@ -74,7 +74,7 @@ impl Requirement {
     /// Split frontmatter and content
     fn split_frontmatter(content: &str) -> Result<(String, String)> {
         let lines: Vec<&str> = content.lines().collect();
-        
+
         // Check if starts with ---
         if !lines.first().map_or(false, |l| l.trim() == "---") {
             return Ok((String::new(), content.to_string()));
@@ -102,7 +102,9 @@ impl Requirement {
 
         for event in parser {
             match event {
-                Event::Start(Tag::Heading { level, .. }) if level == pulldown_cmark::HeadingLevel::H3 => {
+                Event::Start(Tag::Heading { level, .. })
+                    if level == pulldown_cmark::HeadingLevel::H3 =>
+                {
                     // Save previous AC if exists
                     if let Some((_, title)) = current_heading.take() {
                         if title.to_uppercase().contains("AC-") || title.contains("验收") {

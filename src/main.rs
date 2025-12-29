@@ -152,3 +152,64 @@ fn generate_report(req_input: String, code_inputs: Vec<String>) -> Result<()> {
     // For now, just run the same check - in future this will generate HTML
     check_traceability(req_input, code_inputs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_check_traceability_no_requirements() {
+        // Use a glob that matches nothing
+        let res = check_traceability("nonexistent-*.md".to_string(), vec!["src/*.rs".to_string()]);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.to_string().contains("No requirement files found"));
+    }
+
+    #[test]
+    fn test_check_traceability_no_code_files() {
+        // Create a valid requirement file in a temp dir
+        let dir = tempdir().expect("tempdir");
+        let req_path = dir.path().join("req.md");
+        let mut f = File::create(&req_path).expect("create file");
+        let content = r#"---
+id: "REQ-TEST"
+title: "Test Requirement"
+---
+
+### AC-1
+This is an acceptance criterion.
+"#;
+        f.write_all(content.as_bytes()).expect("write");
+
+        // Use a code glob that matches nothing
+        let res = check_traceability(
+            req_path.to_string_lossy().to_string(),
+            vec!["nonexistent-*.rs".to_string()],
+        );
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.to_string().contains("No code files found"));
+    }
+
+    #[test]
+    fn test_check_traceability_invalid_requirement_file() {
+        // Create an invalid requirement file (no frontmatter)
+        let dir = tempdir().expect("tempdir");
+        let req_path = dir.path().join("bad_req.md");
+        let mut f = File::create(&req_path).expect("create file");
+        f.write_all(b"This file has no frontmatter").expect("write");
+
+        // Use an existing code glob (repo src/*.rs should exist)
+        let res = check_traceability(
+            req_path.to_string_lossy().to_string(),
+            vec!["src/*.rs".to_string()],
+        );
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.to_string().contains("No valid requirements loaded"));
+    }
+}

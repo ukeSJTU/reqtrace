@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use tree_sitter::{Language, Parser, Query, QueryCursor};
+use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator};
 
 /// Reference to a requirement found in code
 #[derive(Debug, Clone)]
@@ -34,9 +34,9 @@ impl CodeScanner {
 
     fn init_python(&mut self) -> Result<()> {
         let mut parser = Parser::new();
-        let language = tree_sitter_python::language();
+        let language = tree_sitter_python::LANGUAGE.into();
         parser
-            .set_language(language)
+            .set_language(&language)
             .context("Failed to set Python language")?;
         self.parsers.insert("py".to_string(), (parser, language));
         Ok(())
@@ -69,32 +69,34 @@ impl CodeScanner {
         let mut references = Vec::new();
         
         // Query for comments in the language
-        let query = Query::new(*language, &query_str)
+        let query = Query::new(language, &query_str)
             .context("Failed to create Tree-sitter query")?;
 
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
-
-        for m in matches {
-            for capture in m.captures {
-                let node = capture.node;
-                let text = &content[node.byte_range()];
-                
-                // Extract @reqtrace references
-                if let Some(req_ids) = self.extract_reqtrace_ids(text) {
-                    let line_number = node.start_position().row + 1;
+        
+        // In tree-sitter 0.26+, QueryMatches uses StreamingIterator
+        // We use for_each to process each match
+        cursor.matches(&query, tree.root_node(), content.as_bytes())
+            .for_each(|m| {
+                for capture in m.captures {
+                    let node = capture.node;
+                    let text = &content[node.byte_range()];
                     
-                    for req_id in req_ids {
-                        references.push(TraceReference {
-                            req_id,
-                            file_path: path.display().to_string(),
-                            line_number,
-                            context: text.to_string(),
-                        });
+                    // Extract @reqtrace references
+                    if let Some(req_ids) = self.extract_reqtrace_ids(text) {
+                        let line_number = node.start_position().row + 1;
+                        
+                        for req_id in req_ids {
+                            references.push(TraceReference {
+                                req_id,
+                                file_path: path.display().to_string(),
+                                line_number,
+                                context: text.to_string(),
+                            });
+                        }
                     }
                 }
-            }
-        }
+            });
 
         Ok(references)
     }

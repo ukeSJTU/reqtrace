@@ -1,3 +1,5 @@
+mod config;
+mod error;
 mod file_discovery;
 mod requirement;
 mod scanner;
@@ -128,10 +130,13 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     println!("Found {} trace reference(s)", all_references.len());
 
     // Analyze coverage
-    let all_req_ids: HashSet<String> = req_store.get_all_ids().into_iter().collect();
-    let covered_ids: HashSet<String> = all_references.iter().map(|r| r.req_id.clone()).collect();
+    let all_req_ids: HashSet<_> = req_store.all_ids().collect();
+    let covered_ids: HashSet<_> = all_references.iter().map(|r| r.req_id.as_str()).collect();
 
-    let uncovered_ids: Vec<String> = all_req_ids.difference(&covered_ids).cloned().collect();
+    let uncovered_ids: Vec<String> = all_req_ids
+        .difference(&covered_ids)
+        .map(|&s| s.to_owned())
+        .collect();
 
     // Create report
     let report = TraceabilityReport {

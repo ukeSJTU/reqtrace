@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config::requirement::*;
+
 /// Requirement metadata from frontmatter
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RequirementMeta {
     pub id: String,
     pub title: String,
@@ -24,7 +26,7 @@ pub struct RequirementMeta {
 }
 
 /// Acceptance Criterion (scenario)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AcceptanceCriterion {
     pub id: String,
     pub title: String,
@@ -44,7 +46,7 @@ impl Requirement {
     /// Parse a markdown file with frontmatter
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
-            .context(format!("Failed to read file: {:?}", path.as_ref()))?;
+            .with_context(|| format!("Failed to read file: {}", path.as_ref().display()))?;
         Self::from_string(&content)
     }
 
@@ -76,14 +78,17 @@ impl Requirement {
         let lines: Vec<&str> = content.lines().collect();
 
         // Check if starts with ---
-        if !lines.first().map_or(false, |l| l.trim() == "---") {
+        if !lines
+            .first()
+            .map_or(false, |l| l.trim() == FRONTMATTER_DELIMITER)
+        {
             return Ok((String::new(), content.to_string()));
         }
 
         // Find closing ---
         let end_idx = lines[1..]
             .iter()
-            .position(|l| l.trim() == "---")
+            .position(|l| l.trim() == FRONTMATTER_DELIMITER)
             .context("Frontmatter not closed with ---")?;
 
         let frontmatter = lines[1..=end_idx].join("\n");
@@ -107,7 +112,9 @@ impl Requirement {
                 {
                     // Save previous AC if exists
                     if let Some((_, title)) = current_heading.take() {
-                        if title.to_uppercase().contains("AC-") || title.contains("验收") {
+                        if title.to_uppercase().contains(AC_MARKER_EN)
+                            || title.contains(AC_MARKER_ZH)
+                        {
                             let ac_id = format!("{}.AC-{:02}", req_id, ac_counter);
                             criteria.push(AcceptanceCriterion {
                                 id: ac_id,
@@ -140,7 +147,7 @@ impl Requirement {
 
         // Don't forget the last AC
         if let Some((_, title)) = current_heading {
-            if title.to_uppercase().contains("AC-") || title.contains("验收") {
+            if title.to_uppercase().contains(AC_MARKER_EN) || title.contains(AC_MARKER_ZH) {
                 let ac_id = format!("{}.AC-{:02}", req_id, ac_counter);
                 criteria.push(AcceptanceCriterion {
                     id: ac_id,
@@ -167,6 +174,7 @@ impl Requirement {
     }
 
     /// Get all traceable IDs (requirement ID + all AC IDs)
+    #[allow(dead_code)]
     pub fn get_all_ids(&self) -> Vec<String> {
         let mut ids = vec![self.meta.id.clone()];
         ids.extend(self.acceptance_criteria.iter().map(|ac| ac.id.clone()));
@@ -210,6 +218,7 @@ impl RequirementStore {
         self.requirements.insert(req.meta.id.clone(), req);
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, id: &str) -> Option<&Requirement> {
         self.requirements.get(id)
     }
@@ -226,11 +235,27 @@ impl RequirementStore {
         self.requirements.is_empty()
     }
 
-    /// Get all traceable IDs from all requirements
+    #[allow(dead_code)]
+    pub fn contains(&self, id: &str) -> bool {
+        self.requirements.contains_key(id)
+    }
+
+    #[allow(dead_code)]
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.requirements.keys().map(|s| s.as_str())
+    }
+
+    /// Get all traceable IDs as an iterator (more efficient)
+    pub fn all_ids(&self) -> impl Iterator<Item = &str> + '_ {
+        self.requirements.values().flat_map(|req| {
+            std::iter::once(req.meta.id.as_str())
+                .chain(req.acceptance_criteria.iter().map(|ac| ac.id.as_str()))
+        })
+    }
+
+    /// Get all traceable IDs from all requirements (legacy method, collects to Vec)
+    #[allow(dead_code)]
     pub fn get_all_ids(&self) -> Vec<String> {
-        self.requirements
-            .values()
-            .flat_map(|req| req.get_all_ids())
-            .collect()
+        self.all_ids().map(|s| s.to_owned()).collect()
     }
 }

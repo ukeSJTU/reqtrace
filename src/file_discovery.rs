@@ -3,6 +3,8 @@ use globset::Glob;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::config::discovery::DEFAULT_EXCLUDED_DIRS;
+
 /// Discovers requirement files from a given path.
 ///
 /// Input can be:
@@ -65,7 +67,19 @@ fn discover_files_from_path(
     // Case 2: Directory
     if path_obj.is_dir() {
         let mut files = Vec::new();
-        for entry_result in WalkDir::new(path_obj).follow_links(false) {
+        for entry_result in WalkDir::new(path_obj)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                // Skip excluded directories
+                if e.file_type().is_dir() {
+                    let dir_name = e.file_name().to_string_lossy();
+                    !DEFAULT_EXCLUDED_DIRS.contains(&dir_name.as_ref())
+                } else {
+                    true
+                }
+            })
+        {
             match entry_result {
                 Ok(entry) => {
                     let path = entry.path();
@@ -114,7 +128,19 @@ fn discover_files_from_path(
         base_dir.push(".");
     }
 
-    for entry_result in WalkDir::new(&base_dir).follow_links(false) {
+    for entry_result in WalkDir::new(&base_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip excluded directories
+            if e.file_type().is_dir() {
+                let dir_name = e.file_name().to_string_lossy();
+                !DEFAULT_EXCLUDED_DIRS.contains(&dir_name.as_ref())
+            } else {
+                true
+            }
+        })
+    {
         match entry_result {
             Ok(entry) => {
                 let entry_path = entry.path();
@@ -142,6 +168,7 @@ fn discover_files_from_path(
 }
 
 /// Checks if a path looks like a glob pattern (contains *, ?, [, or **)
+#[allow(dead_code)]
 pub fn is_glob_pattern(path: &str) -> bool {
     path.contains('*') || path.contains('?') || path.contains('[')
 }

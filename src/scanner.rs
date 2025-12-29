@@ -1,18 +1,24 @@
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator};
 
+use crate::config::scanner::*;
+
+/// Cached regex for extracting @reqtrace:ID patterns
+static REQTRACE_REGEX: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(REQTRACE_PATTERN).expect("Invalid reqtrace regex pattern"));
+
 /// Reference to a requirement found in code
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TraceReference {
     pub req_id: String,
-    pub file_path: String,
+    pub file_path: PathBuf,
     pub line_number: usize,
-    #[allow(dead_code)]
-    pub context: String,
 }
 
 /// Scanner for finding @reqtrace comments in code
@@ -37,7 +43,8 @@ impl CodeScanner {
 
     fn init_python(&mut self) -> Result<()> {
         let language = tree_sitter_python::LANGUAGE.into();
-        self.languages.insert("py".to_string(), language);
+        self.languages
+            .insert(extensions::PYTHON.to_string(), language);
         Ok(())
     }
 
@@ -66,8 +73,8 @@ impl CodeScanner {
             return self.scan_file_regex(path);
         }
 
-        let content =
-            fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
         // Get query string first
         let query_str = self.get_comment_query(extension);
@@ -81,7 +88,7 @@ impl CodeScanner {
 
         // Query for comments in the language
         let query =
-            Query::new(&language, &query_str).context("Failed to create Tree-sitter query")?;
+            Query::new(&language, query_str).context("Failed to create Tree-sitter query")?;
 
         let mut cursor = QueryCursor::new();
 
@@ -101,9 +108,8 @@ impl CodeScanner {
                         for req_id in req_ids {
                             references.push(TraceReference {
                                 req_id,
-                                file_path: path.display().to_string(),
+                                file_path: path.to_path_buf(),
                                 line_number,
-                                context: text.to_string(),
                             });
                         }
                     }
@@ -143,30 +149,19 @@ impl CodeScanner {
     }
 
     /// Get the Tree-sitter query for comments in a given language
-    fn get_comment_query(&self, extension: &str) -> String {
+    fn get_comment_query(&self, extension: &str) -> &str {
         match extension {
-            "py" => r#"
-                (comment) @comment
-                (string) @docstring
-            "#
-            .to_string(),
-            "ts" | "js" => r#"
-                (comment) @comment
-            "#
-            .to_string(),
-            "rs" => r#"
-                (line_comment) @comment
-                (block_comment) @comment
-            "#
-            .to_string(),
-            _ => "(comment) @comment".to_string(),
+            extensions::PYTHON => queries::PYTHON,
+            extensions::TYPESCRIPT | extensions::JAVASCRIPT => queries::TYPESCRIPT,
+            extensions::RUST => queries::RUST,
+            extensions::GO => queries::GO,
+            _ => queries::DEFAULT,
         }
     }
 
     /// Extract @reqtrace IDs from comment text
     fn extract_reqtrace_ids(&self, text: &str) -> Option<Vec<String>> {
-        let re = regex::Regex::new(r"@reqtrace:([A-Z0-9\-\.]+)").ok()?;
-        let ids: Vec<String> = re
+        let ids: Vec<String> = REQTRACE_REGEX
             .captures_iter(text)
             .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
             .collect();
@@ -177,21 +172,18 @@ impl CodeScanner {
     /// Fallback regex-based scanning for unsupported languages
     fn scan_file_regex<P: AsRef<Path>>(&self, path: P) -> Result<Vec<TraceReference>> {
         let path = path.as_ref();
-        let content =
-            fs::read_to_string(path).context(format!("Failed to read file: {:?}", path))?;
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
         let mut references = Vec::new();
-        let re =
-            regex::Regex::new(r"@reqtrace:([A-Z0-9\-\.]+)").context("Failed to create regex")?;
 
         for (line_num, line) in content.lines().enumerate() {
-            for cap in re.captures_iter(line) {
+            for cap in REQTRACE_REGEX.captures_iter(line) {
                 if let Some(req_id) = cap.get(1) {
                     references.push(TraceReference {
                         req_id: req_id.as_str().to_string(),
-                        file_path: path.display().to_string(),
+                        file_path: path.to_path_buf(),
                         line_number: line_num + 1,
-                        context: line.to_string(),
                     });
                 }
             }
@@ -201,8 +193,14 @@ impl CodeScanner {
     }
 }
 
+impl Default for CodeScanner {
+    fn default() -> Self {
+        Self::new().expect("Failed to initialize default CodeScanner")
+    }
+}
+
 /// Results of traceability analysis
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct TraceabilityReport {
     pub total_requirements: usize,
     pub covered_requirements: usize,
@@ -219,25 +217,36 @@ impl TraceabilityReport {
     }
 
     pub fn print_summary(&self) {
-        println!("\n=== ReqTrace Report ===");
+        use crate::config::report::*;
+
+        println!("\n{}", TITLE);
         println!("Total Requirements: {}", self.total_requirements);
         println!("Covered: {}", self.covered_requirements);
         println!("Coverage: {:.1}%", self.coverage_percentage());
 
         if !self.references.is_empty() {
-            println!("\n--- Connected Traces ---");
+            println!(
+                "\n{} Connected Traces {}",
+                SECTION_SEPARATOR, SECTION_SEPARATOR
+            );
             for trace in &self.references {
                 println!(
-                    "  ✓ {} -> {}:{}",
-                    trace.req_id, trace.file_path, trace.line_number
+                    "{} {} -> {}:{}",
+                    TRACE_CONNECTED_PREFIX,
+                    trace.req_id,
+                    trace.file_path.display(),
+                    trace.line_number
                 );
             }
         }
 
         if !self.uncovered_ids.is_empty() {
-            println!("\n--- Disconnected Requirements ---");
+            println!(
+                "\n{} Disconnected Requirements {}",
+                SECTION_SEPARATOR, SECTION_SEPARATOR
+            );
             for id in &self.uncovered_ids {
-                println!("  ✗ {}", id);
+                println!("{} {}", TRACE_DISCONNECTED_PREFIX, id);
             }
         }
         println!();

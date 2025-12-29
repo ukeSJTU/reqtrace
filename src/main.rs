@@ -60,7 +60,14 @@ fn main() -> Result<()> {
 fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()> {
     // Discover requirement files
     println!("Discovering requirement files from: {}", req_input);
-    let req_files = discover_requirement_files(&req_input)?;
+    let (req_files, req_disc_errors) = discover_requirement_files(&req_input)?;
+
+    if !req_disc_errors.is_empty() {
+        eprintln!("\nErrors discovering requirement files:");
+        for (path, err) in &req_disc_errors {
+            eprintln!("  ✗ {}: {}", path.display(), err);
+        }
+    }
 
     if req_files.is_empty() {
         bail!("Error: No requirement files found for: {}", req_input);
@@ -90,7 +97,14 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
 
     // Discover code files
     println!("\nDiscovering code files...");
-    let code_files = discover_code_files(&code_inputs)?;
+    let (code_files, code_disc_errors) = discover_code_files(&code_inputs)?;
+
+    if !code_disc_errors.is_empty() {
+        eprintln!("\nErrors discovering code files:");
+        for (path, err) in &code_disc_errors {
+            eprintln!("  ✗ {}: {}", path.display(), err);
+        }
+    }
 
     if code_files.is_empty() {
         bail!("Error: No code files found");
@@ -130,7 +144,10 @@ fn check_traceability(req_input: String, code_inputs: Vec<String>) -> Result<()>
     report.print_summary();
 
     // Exit with error if there were any errors or coverage is incomplete
-    let has_errors = !req_errors.is_empty() || !scan_errors.is_empty();
+    let has_errors = !req_errors.is_empty()
+        || !scan_errors.is_empty()
+        || !req_disc_errors.is_empty()
+        || !code_disc_errors.is_empty();
     let incomplete_coverage = report.covered_requirements < report.total_requirements;
 
     if has_errors || incomplete_coverage {

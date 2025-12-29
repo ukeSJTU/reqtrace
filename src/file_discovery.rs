@@ -9,7 +9,10 @@ use walkdir::WalkDir;
 /// - A single file: returns that file if it exists
 /// - A directory: recursively scans for `**/*.md` files
 /// - A glob pattern: matches files against the pattern (relative to current working directory)
-pub fn discover_requirement_files(path: &str) -> Result<Vec<PathBuf>> {
+/// Discover requirement files and return (files, discovery_errors)
+pub fn discover_requirement_files(
+    path: &str,
+) -> Result<(Vec<PathBuf>, Vec<(PathBuf, anyhow::Error)>)> {
     discover_files_from_path(path, Some("md"))
 }
 
@@ -21,19 +24,24 @@ pub fn discover_requirement_files(path: &str) -> Result<Vec<PathBuf>> {
 /// - A glob pattern: matches files against the pattern (relative to current working directory)
 ///
 /// All discovered files are collected and deduplicated.
-pub fn discover_code_files(paths: &[String]) -> Result<Vec<PathBuf>> {
+/// Discover code files from a list of paths and return (files, discovery_errors)
+pub fn discover_code_files(
+    paths: &[String],
+) -> Result<(Vec<PathBuf>, Vec<(PathBuf, anyhow::Error)>)> {
     let mut all_files = Vec::new();
+    let mut all_errors: Vec<(PathBuf, anyhow::Error)> = Vec::new();
 
     for path_str in paths {
-        let mut files = discover_files_from_path(path_str, None)?;
+        let (mut files, mut errs) = discover_files_from_path(path_str, None)?;
         all_files.append(&mut files);
+        all_errors.append(&mut errs);
     }
 
     // Deduplicate files
     all_files.sort();
     all_files.dedup();
 
-    Ok(all_files)
+    Ok((all_files, all_errors))
 }
 
 // Helper that resolves a path-like string into a list of files. The path may be:
@@ -45,34 +53,42 @@ pub fn discover_code_files(paths: &[String]) -> Result<Vec<PathBuf>> {
 fn discover_files_from_path(
     path_str: &str,
     dir_extension_filter: Option<&str>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<(Vec<PathBuf>, Vec<(PathBuf, anyhow::Error)>)> {
+    let mut discovery_errors: Vec<(PathBuf, anyhow::Error)> = Vec::new();
     let path_obj = Path::new(path_str);
 
     // Case 1: Direct file
     if path_obj.is_file() {
-        return Ok(vec![path_obj.to_path_buf()]);
+        return Ok((vec![path_obj.to_path_buf()], discovery_errors));
     }
 
     // Case 2: Directory
     if path_obj.is_dir() {
         let mut files = Vec::new();
-        for entry in WalkDir::new(path_obj)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = dir_extension_filter {
-                    if path.extension().and_then(|s| s.to_str()) == Some(ext) {
-                        files.push(path.to_path_buf());
+        for entry_result in WalkDir::new(path_obj).follow_links(false) {
+            match entry_result {
+                Ok(entry) => {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(ext) = dir_extension_filter {
+                            if path.extension().and_then(|s| s.to_str()) == Some(ext) {
+                                files.push(path.to_path_buf());
+                            }
+                        } else {
+                            files.push(path.to_path_buf());
+                        }
                     }
-                } else {
-                    files.push(path.to_path_buf());
+                }
+                Err(e) => {
+                    let p = e
+                        .path()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| path_obj.to_path_buf());
+                    discovery_errors.push((p, e.into()));
                 }
             }
         }
-        return Ok(files);
+        return Ok((files, discovery_errors));
     }
 
     // Case 3: Glob pattern
@@ -101,24 +117,31 @@ fn discover_files_from_path(
         ".".to_string()
     };
 
-    for entry in WalkDir::new(base_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let entry_path = entry.path();
-        if entry_path.is_file() && glob.is_match(entry_path) {
-            if let Some(ext) = dir_extension_filter {
-                if entry_path.extension().and_then(|s| s.to_str()) == Some(ext) {
-                    files.push(entry_path.to_path_buf());
+    for entry_result in WalkDir::new(&base_dir).follow_links(false) {
+        match entry_result {
+            Ok(entry) => {
+                let entry_path = entry.path();
+                if entry_path.is_file() && glob.is_match(entry_path) {
+                    if let Some(ext) = dir_extension_filter {
+                        if entry_path.extension().and_then(|s| s.to_str()) == Some(ext) {
+                            files.push(entry_path.to_path_buf());
+                        }
+                    } else {
+                        files.push(entry_path.to_path_buf());
+                    }
                 }
-            } else {
-                files.push(entry_path.to_path_buf());
+            }
+            Err(e) => {
+                let p = e
+                    .path()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from(base_dir.clone()));
+                discovery_errors.push((p, e.into()));
             }
         }
     }
 
-    Ok(files)
+    Ok((files, discovery_errors))
 }
 
 /// Checks if a path looks like a glob pattern (contains *, ?, [, or **)
